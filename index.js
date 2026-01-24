@@ -3,18 +3,20 @@ import cors from "cors";
 import multer from "multer";
 import { exec } from "child_process";
 import fs from "fs";
-import path from "path";
 
 const app = express();
 const PORT = process.env.PORT;
 
+// ✅ ensure upload folder exists
+if (!fs.existsSync("uploads")) {
+  fs.mkdirSync("uploads");
+}
+
 app.use(cors());
 app.use(express.json());
 
-// Upload folder
 const upload = multer({ dest: "uploads/" });
 
-// Health check
 app.get("/", (req, res) => {
   res.json({
     status: "OK",
@@ -22,43 +24,38 @@ app.get("/", (req, res) => {
   });
 });
 
-// Compress PDF API
 app.post("/compress", upload.single("pdf"), (req, res) => {
-  try {
-    const level = req.body.level || "medium";
-    const inputPath = req.file.path;
-    const outputPath = `compressed-${Date.now()}.pdf`;
+  if (!req.file) {
+    return res.status(400).json({ error: "No PDF uploaded" });
+  }
 
-    const gsLevelMap = {
-      low: "/screen",
-      medium: "/ebook",
-      high: "/printer"
-    };
+  const level = req.body.level || "medium";
+  const inputPath = req.file.path;
+  const outputPath = `compressed-${Date.now()}.pdf`;
 
-    const gsCommand = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 \
--dPDFSETTINGS=${gsLevelMap[level]} -dNOPAUSE -dQUIET -dBATCH \
+  const map = {
+    low: "/screen",
+    medium: "/ebook",
+    high: "/printer"
+  };
+
+  const cmd = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 \
+-dPDFSETTINGS=${map[level]} -dNOPAUSE -dQUIET -dBATCH \
 -sOutputFile=${outputPath} ${inputPath}`;
 
-    exec(gsCommand, (error) => {
-      if (error) {
-        return res.status(500).json({
-          error: "Compression failed",
-          details: error.message
-        });
-      }
-
-      res.download(outputPath, () => {
-        fs.unlinkSync(inputPath);
-        fs.unlinkSync(outputPath);
+  exec(cmd, (err) => {
+    if (err) {
+      return res.status(500).json({
+        error: "Compression failed",
+        details: err.message
       });
-    });
+    }
 
-  } catch (err) {
-    res.status(500).json({
-      error: "Unexpected server error",
-      details: err.message
+    res.download(outputPath, () => {
+      fs.unlinkSync(inputPath);
+      fs.unlinkSync(outputPath);
     });
-  }
+  });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
