@@ -1,0 +1,13 @@
+{
+  "name": "develac-pdf-backend",
+  "version": "1.0.0",
+  "description": "Real PDF compression backend using Ghostscript",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "multer": "^1.4.5"
+  }
+}
