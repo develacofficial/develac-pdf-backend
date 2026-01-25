@@ -6,18 +6,16 @@ import fs from "fs";
 import path from "path";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT;
 
 app.use(cors());
 app.use(express.json());
 
-const uploadDir = "uploads";
-const outputDir = "outputs";
+if (!fs.existsSync("uploads")) {
+  fs.mkdirSync("uploads");
+}
 
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir);
-
-const upload = multer({ dest: uploadDir });
+const upload = multer({ dest: "uploads/" });
 
 app.get("/", (req, res) => {
   res.json({
@@ -34,46 +32,40 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
 
   const level = req.body.level || "medium";
 
-  const map = {
+  const presets = {
     low: "/screen",
     medium: "/ebook",
     high: "/printer",
   };
 
   const inputPath = req.file.path;
-  const fileId = Date.now();
-  const outputPath = path.join(outputDir, `${fileId}.pdf`);
+  const outputPath = path.join(
+    "uploads",
+    `compressed-${Date.now()}.pdf`
+  );
 
   const cmd = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 \
--dPDFSETTINGS=${map[level]} -dNOPAUSE -dQUIET -dBATCH \
--sOutputFile=${outputPath} ${inputPath}`;
+-dPDFSETTINGS=${presets[level]} -dNOPAUSE -dQUIET -dBATCH \
+-sOutputFile="${outputPath}" "${inputPath}"`;
 
   exec(cmd, (err) => {
-    fs.unlinkSync(inputPath);
-
     if (err) {
-      return res.status(500).json({
-        error: "Compression failed",
-        details: err.message,
-      });
+      return res.status(500).json({ error: "Compression failed" });
     }
 
-    res.json({
-      success: true,
-      downloadUrl: `/download/${fileId}`,
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="compressed.pdf"'
+    );
+
+    const stream = fs.createReadStream(outputPath);
+    stream.pipe(res);
+
+    stream.on("close", () => {
+      fs.unlinkSync(inputPath);
+      fs.unlinkSync(outputPath);
     });
-  });
-});
-
-app.get("/download/:id", (req, res) => {
-  const filePath = path.join(outputDir, `${req.params.id}.pdf`);
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: "File not found" });
-  }
-
-  res.download(filePath, "compressed.pdf", () => {
-    fs.unlinkSync(filePath);
   });
 });
 
