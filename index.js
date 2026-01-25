@@ -6,88 +6,75 @@ import fs from "fs";
 import path from "path";
 
 const app = express();
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 3000;
 
-// folders
+app.use(cors());
+app.use(express.json());
+
 const uploadDir = "uploads";
 const outputDir = "outputs";
 
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir);
 
-// CORS (browser safe)
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type"]
-}));
-
 const upload = multer({ dest: uploadDir });
 
-// health check
 app.get("/", (req, res) => {
   res.json({
     status: "OK",
     service: "Develac PDF",
-    message: "PDF compression service running 🚀"
+    message: "PDF compression service running 🚀",
   });
 });
 
-// compress API
 app.post("/compress", upload.single("pdf"), (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No PDF uploaded" });
+  if (!req.file) {
+    return res.status(400).json({ error: "No PDF uploaded" });
+  }
+
+  const level = req.body.level || "medium";
+
+  const map = {
+    low: "/screen",
+    medium: "/ebook",
+    high: "/printer",
+  };
+
+  const inputPath = req.file.path;
+  const fileId = Date.now();
+  const outputPath = path.join(outputDir, `${fileId}.pdf`);
+
+  const cmd = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 \
+-dPDFSETTINGS=${map[level]} -dNOPAUSE -dQUIET -dBATCH \
+-sOutputFile=${outputPath} ${inputPath}`;
+
+  exec(cmd, (err) => {
+    fs.unlinkSync(inputPath);
+
+    if (err) {
+      return res.status(500).json({
+        error: "Compression failed",
+        details: err.message,
+      });
     }
 
-    const level = req.body.level || "medium";
-
-    const inputPath = req.file.path;
-    const outputPath = path.join(
-      outputDir,
-      `compressed-${Date.now()}.pdf`
-    );
-
-    const qualityMap = {
-      low: "/screen",
-      medium: "/ebook",
-      high: "/printer"
-    };
-
-    const gsCommand = `
-      gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 \
-      -dPDFSETTINGS=${qualityMap[level]} \
-      -dNOPAUSE -dQUIET -dBATCH \
-      -sOutputFile="${outputPath}" "${inputPath}"
-    `;
-
-    exec(gsCommand, (err) => {
-      if (err) {
-        return res.status(500).json({
-          error: "Compression failed",
-          details: err.message
-        });
-      }
-
-      // IMPORTANT: browser-friendly headers
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        "attachment; filename=compressed.pdf"
-      );
-
-      const stream = fs.createReadStream(outputPath);
-      stream.pipe(res);
-
-      stream.on("close", () => {
-        fs.unlinkSync(inputPath);
-        fs.unlinkSync(outputPath);
-      });
+    res.json({
+      success: true,
+      downloadUrl: `/download/${fileId}`,
     });
+  });
+});
 
-  } catch (e) {
-    res.status(500).json({ error: "Server error" });
+app.get("/download/:id", (req, res) => {
+  const filePath = path.join(outputDir, `${req.params.id}.pdf`);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: "File not found" });
   }
+
+  res.download(filePath, "compressed.pdf", () => {
+    fs.unlinkSync(filePath);
+  });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
