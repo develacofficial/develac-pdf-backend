@@ -1,39 +1,44 @@
 import express from "express";
 import cors from "cors";
 import multer from "multer";
-import { execFile } from "child_process";
+import { exec } from "child_process";
 import fs from "fs";
 import path from "path";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT;
 
-/* -------------------- BASIC SETUP -------------------- */
-
+// ======================
+// CORS (IMPORTANT FIX)
+// ======================
 app.use(
   cors({
     origin: "*",
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type"]
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    exposedHeaders: ["Content-Disposition"]
   })
 );
 
 app.use(express.json());
 
-/* -------------------- UPLOAD FOLDER -------------------- */
+// ======================
+// Ensure folders exist
+// ======================
+const uploadDir = "uploads";
+const outputDir = "outputs";
 
-const UPLOAD_DIR = "uploads";
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR);
-}
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir);
 
-const upload = multer({
-  dest: UPLOAD_DIR,
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB
-});
+// ======================
+// Multer setup
+// ======================
+const upload = multer({ dest: uploadDir });
 
-/* -------------------- HEALTH CHECK -------------------- */
-
+// ======================
+// Health check
+// ======================
 app.get("/", (req, res) => {
   res.json({
     status: "OK",
@@ -42,83 +47,58 @@ app.get("/", (req, res) => {
   });
 });
 
-/* -------------------- PDF COMPRESS API -------------------- */
+// ======================
+// Compress API
+// ======================
+app.post("/compress", upload.single("pdf"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "No PDF uploaded" });
+  }
 
-app.post("/compress", upload.single("pdf"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No PDF uploaded" });
+  const level = req.body.level || "medium";
+
+  const qualityMap = {
+    low: "/screen",
+    medium: "/ebook",
+    high: "/printer"
+  };
+
+  const inputPath = req.file.path;
+  const outputPath = path.join(
+    outputDir,
+    `compressed-${Date.now()}.pdf`
+  );
+
+  const gsCommand = `
+gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 \
+-dPDFSETTINGS=${qualityMap[level]} \
+-dNOPAUSE -dQUIET -dBATCH \
+-sOutputFile=${outputPath} ${inputPath}
+`;
+
+  exec(gsCommand, (error) => {
+    if (error) {
+      console.error(error);
+      return res.status(500).json({
+        error: "Compression failed"
+      });
     }
 
-    const level = req.body.level || "medium";
-
-    const inputPath = req.file.path;
-    const outputPath = path.join(
-      UPLOAD_DIR,
-      `compressed-${Date.now()}.pdf`
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="compressed.pdf"'
     );
 
-    const QUALITY_MAP = {
-      low: "/screen",
-      medium: "/ebook",
-      high: "/printer"
-    };
-
-    const pdfSetting = QUALITY_MAP[level] || "/ebook";
-
-    const gsArgs = [
-      "-sDEVICE=pdfwrite",
-      "-dCompatibilityLevel=1.4",
-      `-dPDFSETTINGS=${pdfSetting}`,
-      "-dNOPAUSE",
-      "-dQUIET",
-      "-dBATCH",
-      `-sOutputFile=${outputPath}`,
-      inputPath
-    ];
-
-    execFile("gs", gsArgs, async (error) => {
-      if (error) {
-        cleanup(inputPath);
-        return res.status(500).json({
-          error: "Compression failed",
-          details: error.message
-        });
-      }
-
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        "attachment; filename=compressed.pdf"
-      );
-
-      const stream = fs.createReadStream(outputPath);
-
-      stream.pipe(res);
-
-      stream.on("close", () => {
-        cleanup(inputPath);
-        cleanup(outputPath);
-      });
+    res.sendFile(path.resolve(outputPath), () => {
+      fs.unlinkSync(inputPath);
+      fs.unlinkSync(outputPath);
     });
-  } catch (err) {
-    return res.status(500).json({
-      error: "Server error",
-      details: err.message
-    });
-  }
+  });
 });
 
-/* -------------------- CLEANUP -------------------- */
-
-function cleanup(filePath) {
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
-  }
-}
-
-/* -------------------- START SERVER -------------------- */
-
+// ======================
+// Start server
+// ======================
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Develac PDF backend running on port ${PORT}`);
 });
