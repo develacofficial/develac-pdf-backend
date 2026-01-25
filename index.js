@@ -8,14 +8,23 @@ import path from "path";
 const app = express();
 const PORT = process.env.PORT;
 
-app.use(cors());
-app.use(express.json());
-
+// folders
 const uploadDir = "uploads";
+const outputDir = "outputs";
+
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir);
+
+// CORS (browser safe)
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type"]
+}));
 
 const upload = multer({ dest: uploadDir });
 
+// health check
 app.get("/", (req, res) => {
   res.json({
     status: "OK",
@@ -24,6 +33,7 @@ app.get("/", (req, res) => {
   });
 });
 
+// compress API
 app.post("/compress", upload.single("pdf"), (req, res) => {
   try {
     if (!req.file) {
@@ -32,25 +42,34 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
 
     const level = req.body.level || "medium";
 
-    const map = {
+    const inputPath = req.file.path;
+    const outputPath = path.join(
+      outputDir,
+      `compressed-${Date.now()}.pdf`
+    );
+
+    const qualityMap = {
       low: "/screen",
       medium: "/ebook",
       high: "/printer"
     };
 
-    const inputPath = req.file.path;
-    const outputPath = path.join(uploadDir, `compressed-${Date.now()}.pdf`);
+    const gsCommand = `
+      gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 \
+      -dPDFSETTINGS=${qualityMap[level]} \
+      -dNOPAUSE -dQUIET -dBATCH \
+      -sOutputFile="${outputPath}" "${inputPath}"
+    `;
 
-    const cmd = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 \
--dPDFSETTINGS=${map[level]} -dNOPAUSE -dQUIET -dBATCH \
--sOutputFile=${outputPath} ${inputPath}`;
-
-    exec(cmd, (err) => {
+    exec(gsCommand, (err) => {
       if (err) {
-        return res.status(500).json({ error: "Compression failed" });
+        return res.status(500).json({
+          error: "Compression failed",
+          details: err.message
+        });
       }
 
-      // 🔥 VERY IMPORTANT HEADERS (browser ke liye)
+      // IMPORTANT: browser-friendly headers
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
@@ -65,6 +84,7 @@ app.post("/compress", upload.single("pdf"), (req, res) => {
         fs.unlinkSync(outputPath);
       });
     });
+
   } catch (e) {
     res.status(500).json({ error: "Server error" });
   }
