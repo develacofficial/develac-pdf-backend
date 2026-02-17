@@ -80,3 +80,52 @@ gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 \
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Develac backend running on port ${PORT}`);
 });
+
+// Merge PDFs
+app.post("/merge", upload.array("pdfs", 10), (req, res) => {
+  if (!req.files || req.files.length < 2) {
+    return res.status(400).json({ error: "At least 2 PDFs required" });
+  }
+
+  // Ensure all files are PDFs
+  for (const file of req.files) {
+    if (!file.originalname.toLowerCase().endsWith(".pdf")) {
+      return res.status(400).json({ error: "Only PDF files allowed" });
+    }
+  }
+
+  const inputFiles = req.files.map(f => `"${f.path}"`).join(" ");
+  const outputPath = path.join(
+    "uploads",
+    `merged-${Date.now()}.pdf`
+  );
+
+  const cmd = `
+gs -dBATCH -dNOPAUSE -q \
+-sDEVICE=pdfwrite \
+-sOutputFile="${outputPath}" \
+${inputFiles}
+`;
+
+  exec(cmd, (error) => {
+    if (error) {
+      console.error("Merge error:", error);
+      return res.status(500).json({ error: "PDF merge failed" });
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="merged.pdf"'
+    );
+
+    const stream = fs.createReadStream(outputPath);
+    stream.pipe(res);
+
+    stream.on("close", () => {
+      // cleanup
+      req.files.forEach(f => fs.unlinkSync(f.path));
+      fs.unlinkSync(outputPath);
+    });
+  });
+});
